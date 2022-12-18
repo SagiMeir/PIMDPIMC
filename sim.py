@@ -1,8 +1,11 @@
 #imports
 import numpy as np
 import pandas as pd
-from scipy.constants import Boltzmann as BOLTZMANN
-from scipy.constants import hbar 
+# from scipy.constants import Boltzmann as BOLTZMANN
+# from scipy.constants import hbar 
+# for hartree unit system the constansts are:
+hbar=1.
+BOLTZMANN=3.166811563E-6 
 #import matplotlib.pyplot as plt
 
 class Simulation:
@@ -98,6 +101,7 @@ class Simulation:
         self.step = step         
         self.fac = fac
         self.M=M
+        self.beads=beads
         # self.Q1=Q1
         
         #system        
@@ -107,12 +111,14 @@ class Simulation:
             self.kind = kind
             self.Natoms = self.R.shape[0]
             self.mass_matrix = np.array( [self.mass,]*3 ).transpose()
+            self.Rbeads = np.zeros( (self.Natoms,3,self.beads) )
         else:
             self.R = np.zeros( (1,3) )
             self.mass = 1.6735575E-27 #H mass in kg as default
             self.kind = ["H"]
             self.Natoms = self.R.shape[0]
             self.mass_matrix = np.array( [self.mass,]*3 ).transpose()
+            self.Rbeads = np.zeros( (1,3,self.beads) )
         if p is not None:
             self.p = p
             self.K = K
@@ -128,11 +134,11 @@ class Simulation:
             self.U = 0.0
         
         # the ring polymer freq w_P:
-        self.omega_P = np.sqrt(self.Natoms) * BOLTZMANN * self.temp / hbar
+        self.omega_P = np.sqrt(self.beads) * BOLTZMANN * self.temp / hbar
         # the thermostates masses
         self.Q = BOLTZMANN * self.temp / self.omega_P**2
         # stagging trasformation
-        self.u=np.zeros(self.Natoms)
+        self.u=np.zeros((self.Natoms,3,self.beads))
         
         # stagging masses
         self.mk = np.zeros(self.Natoms)
@@ -279,10 +285,6 @@ class Simulation:
         None. Sets the value of self.p.
         """
         
-        ################################################################
-        ####################### YOUR CODE GOES HERE ####################
-        ################################################################
-        
         # for every dimansion P(v)=sqrt(m/2piKT)*exp(-mv^2/2KT)
         # This is a normal distribution with mean=0, sigma=sqrt(KT/m)
         self.p= self.mass * np.random.normal(loc=0,
@@ -307,10 +309,6 @@ class Simulation:
         None. Sets the value of self.p.
         """
         
-        ################################################################
-        ####################### YOUR CODE GOES HERE ####################
-        ################################################################
-        
         # for every dimansion P(v)=sqrt(m/2piKT)*exp(-mv^2/2KT)
         # This is a normal distribution with mean=0, sigma=sqrt(KT/m)
         self.p_eta= self.Q * np.random.normal(loc=0,
@@ -332,9 +330,6 @@ class Simulation:
         None. Sets the value of self.R.
         """
         
-        ################################################################
-        ####################### YOUR CODE GOES HERE ####################
-        ################################################################
         self.R[self.R>(self.L /2)]-=self.L
         self.R[self.R<=-(self.L /2)]+=self.L
                     
@@ -345,10 +340,7 @@ class Simulation:
         -------
         None. Sets the value of self.R.
         """    
-        
-        ################################################################
-        ####################### YOUR CODE GOES HERE ####################
-        ################################################################
+
         x_cm=self.R[:,0].mean()
         y_cm=self.R[:,1].mean()
         z_cm=self.R[:,2].mean()
@@ -474,14 +466,14 @@ class Simulation:
         ################################################################
         ####################### YOUR CODE GOES HERE ####################
         ################################################################
-        P=self.Natoms
+        P=self.beads
         # self.F[0] = - self.mass * omega**2 * ( self.R[:,0].sum() ) / P
         # for i in range(1,P):
             # self.F[i] = - self.mass * omega**2 *( self.R[i,0]   - ( (i-1)/i) *  self.R[i-1,0] ) / P
-        self.F= - self.mass * omega**2 *  self.R[:,0]  / P
-        self.U= 0.5 * self.mass * omega**2 * ( (self.R[:,0])**2 ).mean() 
-        x_c=self.R[:,0].mean()
-        self.K = 0.5*( BOLTZMANN * self.temp + ( (self.R[:,0]-x_c)*self.mass*omega**2 * self.R[:,0] ).mean() )
+        self.F= - self.mass * omega**2 *  self.Rbeads[:,0,:]  / P
+        self.U= 0.5 * self.mass * omega**2 * ( (self.Rbeads[:,0,:])**2 ).mean() 
+        x_c=self.Rbeads[:,0,:].mean()
+        self.K = 0.5*( BOLTZMANN * self.temp + ( (self.R[:,0]-x_c)*self.mass*omega**2 * self.Rbeads[:,0,:] ).mean() )
 
 
     def evalNoseHoover( self ):
@@ -505,10 +497,10 @@ class Simulation:
         -------
         None. sets the values of self.u
         """
-        P=self.Natoms
-        self.u[0]=self.R[0,0]
+        P=self.beads
+        self.u[:,:,0]=self.Rbeads[:,:,0]
         for i in range(1,P):
-            self.u[i]=self.R[i,0] - ( i*self.R[(i+1)%P,0] + self.R[0,0] ) / (i+1)
+            self.u[:,:,i]=self.Rbeads[:,:,i] - ( i*self.Rbeads[:,:,(i+1)%P] + self.Rbeads[:,:,0] ) / (i+1)
     
     
     def Inverse_Stagging( self ):
@@ -518,10 +510,10 @@ class Simulation:
         -------
         None. sets the values of self.R
         """
-        P=self.Natoms
-        self.R[0,0]=self.u[0]
+        P=self.beads
+        self.Rbeads[:,:,0]=self.u[:,:,0]
         for i in range(P,1,-1):
-            self.R[i-1,0] = self.u[i-1] + (i-1)*self.R[i%P,0]/i +  self.u[0]/i
+            self.Rbeads[:,:,i-1] = self.u[:,:,i-1] + (i-1)*self.R[:,:,i%P]/i +  self.u[:,:,0]/i
     
     
     def CalcKinE( self ):
