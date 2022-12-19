@@ -12,7 +12,7 @@ class Simulation:
     
     def __init__( self, dt, L, temp=298, M=4, Nsteps=0, R=None, beads=1, mass=None, kind=None, \
                  p=None, F=None, U=None, K=None, seed=937142, ftype=None, \
-                 step=0, printfreq=1000, xyzname="sim.xyz", fac=1.0, \
+                 step=0, printfreq=1000, xyzname="sim.xyz", fac=1.0, thermo_type=None, \
                  outname="sim.log", debug=False ):
         """
         THIS IS THE CONSTRUCTOR. SEE DETAILED DESCRIPTION OF DATA MEMBERS
@@ -75,6 +75,9 @@ class Simulation:
             
         fac : float, optional
             Factor to multiply the positions for printing. The default is 1.0.
+        
+        thermo_type: str, optional
+            String to call the thermostating evaluation method. The default is None.
             
         outname : TYPE, optional
             DESCRIPTION. The default is "sim.log".
@@ -100,8 +103,10 @@ class Simulation:
         self.seed = seed 
         self.step = step         
         self.fac = fac
-        self.M=M
+        self.M=M # number of NH thermostates
         self.beads=beads
+        self.spring_E=0 # the springs energy
+        self.spring_F=0 # springs force
         # self.Q1=Q1
         
         #system        
@@ -163,6 +168,14 @@ class Simulation:
                 self.deltaLJ=0
         else:
             raise ValueError("Wrong ftype value - use LJ or Harm or Anharm.")
+        
+        #check the thermostating type
+        if (thermo_type == "NHC" or thermo_type == "Langevin"):
+            self.thermo_type="Thermostat_"+thermo_type
+        elif thermo_type == None:
+            self.thermo_type="Nothing"
+        else:
+            raise ValueError("Wrong thermo_type value - use NHC or Langevin.")
     
     def __del__( self ):
         """
@@ -196,6 +209,17 @@ class Simulation:
         """
         
         getattr(self, self.Utype)(**kwargs)
+    
+    def Thermostat(self):
+        """
+        THIS FUNCTION CALLS THE DESIRED THERMOSTATING METHOD.
+
+        Returns
+        -------
+        None. Calls the correct method based on self.thermo_type
+
+        """
+        getattr(self, self.thermo_type)
         
     def dumpThermo( self ):
         """
@@ -267,6 +291,13 @@ class Simulation:
         self.R = df[ [1,2,3] ].to_numpy()
         self.Natoms = self.R.shape[0]
         
+    def Nothing(self):
+        """
+        FUNCTION THAT DOES NOTHING. CORRENTLY USFULL FOR THE NVE ENSEMBLE
+        """
+        
+        
+        
 ################################################################
 ################## NO EDITING ABOVE THIS LINE ##################
 ################################################################
@@ -289,11 +320,14 @@ class Simulation:
         # This is a normal distribution with mean=0, sigma=sqrt(KT/m)
         self.p= self.mass * np.random.normal(loc=0,
                                              scale=(BOLTZMANN*self.temp/self.mass)**0.5,
-                                             size=(self.Natoms)
-                                             )     
+                                             size=(self.Natoms,3,self.beads)
+                                             )    
         # loc is the mean, scale is sigma, and size is N dimansional
-    
-    
+        if removeCM:
+            self.p[:,0,:]-=self.p.mean(axis=(0,2))[0]
+            self.p[:,1,:]-=self.p.mean(axis=(0,2))[1]
+            self.p[:,2,:]-=self.p.mean(axis=(0,2))[2]
+                
     def sampleMB_NoseHoover( self ):
         """
         THIS FUNCTIONS SAMPLES INITIAL MOMENTA FROM THE MB DISTRIBUTION.
@@ -470,10 +504,10 @@ class Simulation:
         # self.F[0] = - self.mass * omega**2 * ( self.R[:,0].sum() ) / P
         # for i in range(1,P):
             # self.F[i] = - self.mass * omega**2 *( self.R[i,0]   - ( (i-1)/i) *  self.R[i-1,0] ) / P
-        self.F= - self.mass * omega**2 *  self.Rbeads[:,0,:]  / P
-        self.U= 0.5 * self.mass * omega**2 * ( (self.Rbeads[:,0,:])**2 ).mean() 
-        x_c=self.Rbeads[:,0,:].mean()
-        self.K = 0.5*( BOLTZMANN * self.temp + ( (self.R[:,0]-x_c)*self.mass*omega**2 * self.Rbeads[:,0,:] ).mean() )
+        self.F= - self.mass * omega**2 *  self.Rbeads  / P 
+        self.U= 0.5 * self.mass * omega**2 * ( (self.Rbeads)**2 ).sum() / P 
+        # x_c=self.Rbeads[:,0,:].mean()
+        # self.K = 0.5*( BOLTZMANN * self.temp + ( (self.Rbeads[:,0,:]-x_c)*self.mass*omega**2 * self.Rbeads[:,0,:] ).sum()/P )
 
 
     def evalNoseHoover( self ):
@@ -528,6 +562,44 @@ class Simulation:
         ####################### YOUR CODE GOES HERE ####################
         ################################################################
         self.K =( ((self.p)**2).sum() )/ (2*self.mass)
+    
+    def spring_energy( self ):
+        """
+        THIS FUNCTION CALCULATES THE ENERGY AND FORCES OF THE SPRINGS BETWEEN THE BEADS
+
+        Returns
+        -------
+        None. Sets self.spring_E, self.spring_F
+
+        """
+        P=self.beads
+        x_next=self.Rbeads[:,:,(np.arange(P)+1)%P]
+        x_prev=self.Rbeads[:,:,(np.arange(P)-1)%P]
+        self.spring_F=-self.mass*self.omega_P**2*(2*self.Rbeads-x_next-x_prev)
+        self.spring_E=0.5*self.mass*self.omega_P**2*((x_next-self.Rbeads)**2).sum()
+        # self.spring_E=0
+        # self.spring_F=np.zeros((self.Natoms,3,P))
+        # for j in range(self.Natoms):
+            # for i in range(P):
+                # self.spring_E+=0.5*self.mass*self.omega_P**2*((self.Rbeads[j,:,(i+1)%P]-self.Rbeads[j,:,i])**2).sum() 
+                # self.spring_F[j,:,i]=-self.mass*self.omega_P**2*(2*self.Rbeads[j,:,i]-self.Rbeads[j,:,(i+1)%P]-self.Rbeads[j,:,(i-1)%P]) 
+    
+    def Thermostat_Langevin( self ):
+        """
+        THIS FUNCTION THERMOSTATES THE SYSTEM TO THE DESIRED TEMPRERATURE.
+
+        Returns
+        -------
+        None.
+
+        """
+        # self.p =( self.p * np.exp(-0.5*self.omega_P*self.dt) + 
+        #          (self.mk*self.temp*BOLTZMANN*(1-np.exp(-self.omega_P*self.dt)))**0.5 * 
+        #          np.random.normal(loc=0,scale=1,size=(self.Natoms))  )
+        self.p =( self.p * np.exp(-0.5*self.omega_P*self.dt) + 
+                  (self.mass*self.temp*BOLTZMANN*(1-np.exp(-self.omega_P*self.dt)))**0.5 * 
+                  np.random.normal(loc=0,scale=1,size=(self.Natoms,3,self.beads))  )
+        
         
     def VVstep( self, **kwargs ):
         """
@@ -536,37 +608,25 @@ class Simulation:
         -------
         None. Sets self.R, self.p.
         """
-        
-        ################################################################
-        ####################### YOUR CODE GOES HERE ####################
-        ################################################################
+
         # The steps are written in detail in the jupyter notebook report.
+        self.Thermostat()
         
-        # STEP 1:
-        # self.p =( self.p * np.exp(-0.5*self.omega_P*self.dt) + 
-        #          (self.mk*self.temp*BOLTZMANN*(1-np.exp(-self.omega_P*self.dt)))**0.5 * 
-        #          np.random.normal(loc=0,scale=1,size=(self.Natoms))  )
-       
-        # STEP 2:
+        self.spring_energy()
         # self.p+= 0.5*(-self.mk*self.omega_P**2*self.u + self.F)*self.dt
-        x_next = np.append(self.R[1:,0],self.R[0,0])
-        x_prev= np.append(self.R[-1,0],self.R[:-1,0])
-        self.p+= 0.5*(-self.mass*self.omega_P**2*(2*self.R[:,0]-x_next-x_prev) + self.F )*self.dt 
-        # STEP 3:
-        self.R[:,0]+=self.p*self.dt/self.mass
+        self.p+= 0.5*(self.spring_F + self.F )*self.dt 
+        
+        self.Rbeads+=self.p*self.dt/self.mass
         # self.u+= self.p*self.dt/self.mk_prime
         # self.Inverse_Stagging()
+        self.R=self.Rbeads.mean(axis=(2))
         self.evalForce(**kwargs)
-        # STEP 4:
-        # self.p+= 0.5*(-self.mk*self.omega_P**2*self.u + self.F)*self.dt
-        x_next = np.append(self.R[1:,0],self.R[0,0])
-        x_prev= np.append(self.R[-1,0],self.R[:-1,0])
-        self.p+= 0.5*(-self.mass*self.omega_P**2*(2*self.R[:,0]-x_next-x_prev) + self.F )*self.dt
+        self.spring_energy()
         
-        # STEP 5:
-        # self.p =( self.p * np.exp(-0.5*self.omega_P*self.dt) + 
-        #          (self.mk*self.temp*BOLTZMANN*(1-np.exp(-self.omega_P*self.dt)))**0.5 * 
-        #          np.random.normal(loc=0,scale=1,size=(self.Natoms))  )
+        # self.p+= 0.5*(-self.mk*self.omega_P**2*self.u + self.F)*self.dt
+        self.p+= 0.5*(self.spring_F + self.F )*self.dt 
+        
+        self.Thermostat()
        
         ''' 
         # STEP 1:
@@ -633,12 +693,13 @@ class Simulation:
         #U_list=[]
         #K_list=[]
         H_list=[] # the classical energy
+        spring_E_list=[]
         step_list=[]
-        self.StaggingTrans()
-        self.sampleMB()
+        # self.StaggingTrans()
+        self.sampleMB(removeCM=False)
         # self.sampleMB_NoseHoover()
         for self.step in range(self.Nsteps):
-            self.Inverse_Stagging()
+            #self.Inverse_Stagging()
             self.evalForce(**kwargs)
             # self.evalNoseHoover()
             self.VVstep(**kwargs)
@@ -646,10 +707,9 @@ class Simulation:
             #         + self.Natoms*self.U +  0.5*(self.p_eta**2).sum()/self.Q 
             #         + BOLTZMANN*self.temp*self.eta.sum()) 
             # self.H=  (0.5*self.p**2/self.mk_prime +0.5*self.omega_P**2*self.mk*self.u**2).sum() + self.U
-            x_next = np.append(self.R[1:,0],self.R[0,0])
-            self.H=  (0.5*self.p**2/self.mass +0.5*self.omega_P**2*self.mass*(x_next-self.R[:,0])**2).sum() + self.U
+            self.H=  (0.5*self.p**2/self.mass).sum() +self.spring_E + self.U
             #self.applyPBC()
-            #self.CalcKinE()
+            self.CalcKinE()
             # the potential and kinetic energy was estimated at VVstep that called evalForce
             self.E=self.K+self.U
             if (( (self.step)%(self.printfreq) )==0):
@@ -658,11 +718,12 @@ class Simulation:
                 #K_list.append(self.K)
                 step_list.append(self.step)
                 H_list.append(self.H)
+                spring_E_list.append(self.spring_E)
                 self.dumpThermo()
                 self.outfile.flush()
                 self.dumpXYZ()
                 self.xyzfile.flush()
-        simlog=pd.DataFrame({'step':np.array(step_list),'H':np.array(H_list)})
+        simlog=pd.DataFrame({'step':np.array(step_list),'H':np.array(H_list),'sE':np.array(spring_E_list)})
         #simlog=pd.DataFrame({'step':np.array(step_list),'K':np.array(K_list),'U':np.array(U_list),'E':np.array(E_list)})
         simlog.to_csv('simlog.csv',index=False)
 
