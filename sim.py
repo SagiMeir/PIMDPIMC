@@ -128,14 +128,14 @@ class Simulation:
             self.p = p
             self.K = K
         else:
-            self.p = np.zeros( (self.Natoms) )
+            self.p = np.zeros( (self.Natoms,3,self.beads) )
             self.K = 0.0
         
         if F is not None:
             self.F = F
             self.U = U
         else:
-            self.F = np.zeros( (self.Natoms) )
+            self.F = np.zeros( (self.Natoms,3,self.beads) )
             self.U = 0.0
         
         # the ring polymer freq w_P:
@@ -146,13 +146,13 @@ class Simulation:
         self.u=np.zeros((self.Natoms,3,self.beads))
         
         # stagging masses
-        self.mk = np.zeros(self.Natoms)
-        self.mk_prime = np.zeros(self.Natoms)
-        self.mk[0] = 0
-        self.mk_prime[0] = self.mass
-        for i in range(1,self.Natoms):
-            self.mk[i] = (i+1)*self.mass/i
-            self.mk_prime[i] = (i+1)*self.mass/i
+        self.mk = np.zeros((self.Natoms,3,self.beads))
+        self.mk_prime = np.zeros((self.Natoms,3,self.beads))
+        self.mk[:,:,0] = 0
+        self.mk_prime[:,:,0] = self.mass
+        for i in range(1,self.beads):
+            self.mk[:,:,i] = (i+1)*self.mass/i
+            self.mk_prime[:,:,i] = (i+1)*self.mass/i
         
         
         #set RNG seed
@@ -501,9 +501,9 @@ class Simulation:
         ####################### YOUR CODE GOES HERE ####################
         ################################################################
         P=self.beads
-        # self.F[0] = - self.mass * omega**2 * ( self.R[:,0].sum() ) / P
+        # self.F[:,:,0] = - self.mass * omega**2 * ( self.Rbeads.sum(axis=(2)) ) / P
         # for i in range(1,P):
-            # self.F[i] = - self.mass * omega**2 *( self.R[i,0]   - ( (i-1)/i) *  self.R[i-1,0] ) / P
+            # self.F[:,:,i] = - self.mass * omega**2 * self.Rbeads[:,:,i]/P   + ( (i-1)/i) *  self.F[:,:,i-1] 
         self.F= - self.mass * omega**2 *  self.Rbeads  / P 
         self.U= 0.5 * self.mass * omega**2 * ( (self.Rbeads)**2 ).sum() / P 
         # x_c=self.Rbeads[:,0,:].mean()
@@ -535,6 +535,7 @@ class Simulation:
         self.u[:,:,0]=self.Rbeads[:,:,0]
         for i in range(1,P):
             self.u[:,:,i]=self.Rbeads[:,:,i] - ( i*self.Rbeads[:,:,(i+1)%P] + self.Rbeads[:,:,0] ) / (i+1)
+        # self.u[:,:,1:] = self.Rbeads[:,:,1:] - (np.arange(1,P)[np.newaxis,np.newaxis,:]*self.Rbeads[:,:,(np.arange(1,P)+1)%P] + self.Rbeads[:,:,0] )/(np.arange(1,P)+1)[np.newaxis,np.newaxis,:]
     
     
     def Inverse_Stagging( self ):
@@ -547,7 +548,8 @@ class Simulation:
         P=self.beads
         self.Rbeads[:,:,0]=self.u[:,:,0]
         for i in range(P,1,-1):
-            self.Rbeads[:,:,i-1] = self.u[:,:,i-1] + (i-1)*self.R[:,:,i%P]/i +  self.u[:,:,0]/i
+            self.Rbeads[:,:,i-1] = self.u[:,:,i-1] + (i-1)*self.Rbeads[:,:,i%P]/i +  self.u[:,:,0]/i
+        # self.Rbeads[:,:,1:] = self.u[:,:,0] + ( np.arange()*self.u[:,:,1:] ).sum()
     
     
     def CalcKinE( self ):
@@ -594,8 +596,8 @@ class Simulation:
 
         """
         # self.p =( self.p * np.exp(-0.5*self.omega_P*self.dt) + 
-        #          (self.mk*self.temp*BOLTZMANN*(1-np.exp(-self.omega_P*self.dt)))**0.5 * 
-        #          np.random.normal(loc=0,scale=1,size=(self.Natoms))  )
+        #           (self.mk*self.temp*BOLTZMANN*(1-np.exp(-self.omega_P*self.dt)))**0.5 * 
+        #           np.random.normal(loc=0,scale=1,size=(self.Natoms))  )
         self.p =( self.p * np.exp(-0.5*self.omega_P*self.dt) + 
                   (self.mass*self.temp*BOLTZMANN*(1-np.exp(-self.omega_P*self.dt)))**0.5 * 
                   np.random.normal(loc=0,scale=1,size=(self.Natoms,3,self.beads))  )
@@ -699,7 +701,7 @@ class Simulation:
         self.sampleMB(removeCM=False)
         # self.sampleMB_NoseHoover()
         for self.step in range(self.Nsteps):
-            #self.Inverse_Stagging()
+            # self.Inverse_Stagging()
             self.evalForce(**kwargs)
             # self.evalNoseHoover()
             self.VVstep(**kwargs)
